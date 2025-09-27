@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pterodactyl Panel KS Warrior</title>
+<style>
+body {
+    font-family: Arial, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px;
+}
+h1 {
+    color: #000;
+    margin-bottom: 20px;
+    font-family: 'Arial', sans-serif;
+    font-size: 25px;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    text-shadow: 1px 1px 2px rgba(0,0,0,0.2);
+    transition: color 0.3s ease, transform 0.3s ease;
+}
+h1:hover {
+    color: #007bff;
+    transform: scale(1.05);
+}
+.selectors {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 20px;
+    flex-wrap: nowrap;
+    align-items: center;
+}
+select {
+    padding: 10px 15px;
+    font-size: 16px;
+    border-radius: 5px;
+    border: none;
+    border-bottom: 3px solid blue;
+    cursor: pointer;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    background-color: #eee;
+}
+.info {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    background-color: #eee;
+    padding: 25px;
+    font-size: 13px;
+    border-radius: 8px;
+    width: 100%;
+    max-width: 700px;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+    margin-top: 5px;
+}
+pre {
+    background-color: #1e1e2f;
+    color: #f1f1f1;
+    padding: 10px;
+    border-radius: 5px;
+    font-size: 12px;
+    overflow-x: auto;
+    font-family: 'Fira Code', monospace;
+    margin: 0;
+}
+button.copy-btn {
+    padding: 8px 16px;
+    border: none;
+    border-radius: 5px;
+    background-color: blue;
+    color: #fff;
+    cursor: pointer;
+    align-self: flex-start;
+}
+</style>
+</head>
+<body>
+<h1>Pterodactyl Panel</h1>
+<div class="selectors">
+    <select id="platform" onchange="showInfo()">
+        <option value="">Select Platform</option>
+        <option value="github">GitHub</option>
+        <option value="firebase">Firebase</option>
+        <option value="realvps">Real VPS</option>
+        <option value="other">Other</option>
+    </select>
+    <select id="action" onchange="showInfo()">
+        <option value="">Select Action</option>
+        <option value="install_panel">Install Panel</option>
+        <option value="install_wings">Install Wings</option>
+        <option value="update_panel">Update Panel</option>
+        <option value="update_wings">Update Wings</option>
+        <option value="configure_wings">Configure Wings</option>
+        <option value="uninstall_panel">Uninstall Panel</option>
+        <option value="uninstall_wings">Uninstall Wings</option>
+    </select>
+</div>
+<div class="info" id="info">
+    <p>Select a platform and an action above to see code.</p>
+</div>
+<footer style="margin-top:50px;text-align:center;font-size:15px;color:#333;">
+    <p>Made with ❤️ by <strong>KS Warrior</strong></p>
+    <p>
+        <a href="https://discord.gg/YOUR_INVITE_LINK" target="_blank" style="color:#5865F2;text-decoration:none;font-weight:bold;">Join My Discord</a> |
+        <a href="https://youtube.com/@YOUR_CHANNEL" target="_blank" style="color:#FF0000;text-decoration:none;font-weight:bold;">Watch on YouTube</a>
+    </p>
+</footer>
+<script>
+function showInfo() {
+    const action = document.getElementById('action').value;
+    const platform = document.getElementById('platform').value;
+    const infoDiv = document.getElementById('info');
+    
+    if (!action || !platform) {
+        infoDiv.innerHTML = `<p>Select an action and a platform above to see code.</p>`;
+        return;
+    }
+
+    const codes = {
+        "install_panel": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/install_panel)",desc: "Clone the Pterodactyl Panel repository from GitHub. Make sure PHP, MySQL, and Docker are installed before proceeding."},
+            "firebase": {code: "(coming soon)",desc: "You cannot host the Panel directly on Firebase. Use Firebase Functions along with a VPS backend."},
+            "realvps": {code: "(coming soon)",desc: "Install Pterodactyl Panel on a real VPS with required dependencies."},
+            "other": {code: "(coming soon)",desc: "Manual install steps for other platforms."}
+        },
+        "install_wings": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/install_wings)",desc: "Clone the Wings daemon from GitHub to manage your servers."},
+            "firebase": {code: "(coming soon)",desc: "Wings cannot run on Firebase. Use a VPS or local machine."},
+            "realvps": {code: "(coming soon)",desc: "Install Wings on your VPS by downloading the latest release."},
+            "other": {code: "(coming soon)",desc: "Manually set up Wings on your hosting environment."}
+        },
+        "update_panel": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/update_panel)",desc: "Pull the latest changes from GitHub and update database migrations."},
+            "firebase": {code: "(coming soon)",desc: "Update your Firebase Functions if you have any hosting integration."},
+            "realvps": {code: "(coming soon)",desc: "Update the Panel on VPS and restart all required services."},
+            "other": {code: "(coming soon)",desc: "Follow update instructions specific to your hosting platform."}
+        },
+        "update_wings": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/update_wings)",desc: "Pull the latest changes from GitHub to update your Wings."},
+            "firebase": {code: "(coming soon)",desc: "Update your Firebase Functions if you have any hosting integration."},
+            "realvps": {code: "(coming soon)",desc: "Update the Wings daemon on VPS and restart service."},
+            "other": {code: "(coming soon)",desc: "Follow update instructions specific to your hosting platform."}
+        },
+        "configure_wings": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/configure_wings)",desc: "Automatically configure Wings with your node UUID & token (interactive)."},
+            "firebase": {code: "(coming soon)",desc: "You cannot configure Wings on Firebase because Wings must run on a real VPS."},
+            "realvps": {code: "(coming soon)",desc: "Configure Wings on your VPS (UUID, token, API port) and restart service automatically."},
+            "other": {code: "(coming soon)",desc: "Run interactive Wings configuration script on other environments."}
+        },
+        "uninstall_panel": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/uninstall_panel)",desc: "Stop services and remove Pterodactyl Panel files completely."},
+            "firebase": {code: "(coming soon)",desc: "Uninstall not supported on Firebase."},
+            "realvps": {code: "(coming soon)",desc: "Stop and disable services, remove panel files, clean up system."},
+            "other": {code: "(coming soon)",desc: "Manually remove Pterodactyl panel on other environments."}
+        },
+        "uninstall_wings": {
+            "github": {code: "bash <(curl -s https://pterodactyl-kscode.vercel.app/github/uninstall_wings)",desc: "Stop wings container and remove configuration."},
+            "firebase": {code: "(coming soon)",desc: "Uninstall not supported on Firebase."},
+            "realvps": {code: "(coming soon)",desc: "Stop wings, remove docker container, delete /etc/pterodactyl."},
+            "other": {code: "(coming soon)",desc: "Manually uninstall Wings on other platforms."}
+        }
+    };
+
+    const selected = codes[action][platform];
+    infoDiv.innerHTML = `
+        <h2>${action.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())} on ${platform.charAt(0).toUpperCase() + platform.slice(1)}</h2>
+        <p>${selected.desc}</p>
+        <pre id="code-box">${selected.code}</pre>
+        <button class="copy-btn" onclick="copyCode()">Copy</button>
+    `;
+}
+
+function copyCode() {
+    const code = document.getElementById('code-box').innerText;
+    navigator.clipboard.writeText(code).then(() => {
+        alert("Code copied to clipboard!");
+    });
+}
+</script>
+</body>
+</html>
