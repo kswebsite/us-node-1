@@ -1,226 +1,249 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-install_panel() {
-    GREEN="\e[32m"
-    RED="\e[31m"
-    YELLOW="\e[33m"
-    NC="\e[0m"
+# ── Colors ──────────────────────────────────────────────
+GREEN="\e[32m"
+RED="\e[31m"
+YELLOW="\e[33m"
+NC="\e[0m"
 
-    ok()   { echo -e "${GREEN}[✔] $1${NC}"; }
-    fail() { echo -e "${RED}[✖] $1${NC}"; exit 1; }
-    info() { echo -e "${YELLOW}[… ] $1${NC}"; }
-    log()  { echo -e "\n🔹 $1"; }
+ok()   { echo -e "${GREEN}[✔] $1${NC}" ; }
+fail() { echo -e "${RED}[✖] $1${NC}" ; exit 1 ; }
+info() { echo -e "${YELLOW}[i] $1${NC}" ; }
 
-    ask() {
-        local prompt="$1"
-        local default="$2"
-        local input
-        read -p "$prompt [$default]: " input
-        echo "${input:-$default}"
-    }
+[[ $EUID -ne 0 ]] && fail "Run this script as root (sudo)"
 
-    [ "$EUID" -ne 0 ] && fail "Run as root"
+clear
+echo -e "${YELLOW}KS Warrior - Pterodactyl Panel (Docker Single-Container)${NC}\n"
 
-    info "Checking Docker..."
-    if ! command -v docker &>/dev/null; then
-        info "Installing Docker..."
-        curl -fsSL https://get.docker.com | bash || fail "Docker install failed"
-        ok "Docker installed"
-    else
-        ok "Docker already installed"
-    fi
+# ── User config ───────────────────────────────────────
+read -p "Domain / subdomain [panel.example.com]: " DOMAIN
+DOMAIN=${DOMAIN:-panel.example.com}
 
-    info "Checking Docker Compose..."
-    if ! docker compose version &>/dev/null; then
-        info "Installing Docker Compose..."
-        DOCKER_COMPOSE_VERSION=$(curl -s https://api.github.com/repos/docker/compose/releases/latest | grep -Po '"tag_name": "\K.*?(?=")')
-        curl -L "https://github.com/docker/compose/releases/download/$DOCKER_COMPOSE_VERSION/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose || fail "Docker Compose download failed"
-        chmod +x /usr/local/bin/docker-compose
-        ok "Docker Compose installed"
-    else
-        ok "Docker Compose already installed"
-    fi
+read -p "External port [80]: " HOST_PORT
+HOST_PORT=${HOST_PORT:-80}
 
-    NAME=ks-ptero-panel
-    IMAGE=$(ask "Enter Docker image" "ubuntu:22.04")
-    RAM=$(ask "Enter memory limit in GB" "2")
-    PORT=$(ask "Enter port to access panel" "80")
-    DOMAIN=$(ask "Enter your domain (example.com)" "panel.example.com")
+read -p "Container RAM limit in GB [2]: " RAM_GB
+RAM_GB=${RAM_GB:-2}
 
-    if [ -f docker-compose.yml ]; then
-        log "Removing existing Docker setup..."
-        docker-compose down
-        rm -f docker-compose.yml
-    fi
+read -rp "Admin email [admin@example.com]: " ADMIN_EMAIL
+ADMIN_EMAIL=${ADMIN_EMAIL:-admin@example.com}
 
-    log "Creating docker-compose.yml..."
-    cat <<EOF > docker-compose.yml
+read -rp "Admin username [admin]: " ADMIN_USER
+ADMIN_USER=${ADMIN_USER:-admin}
+
+read -rsp "Admin password [random if empty]: " ADMIN_PASS
+echo
+if [[ -z "$ADMIN_PASS" ]]; then
+    ADMIN_PASS=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 16)
+fi
+echo -e " → Using password: ${YELLOW}${ADMIN_PASS}${NC}  (SAVE THIS!)"
+
+read -rp "Timezone [Asia/Kolkata]: " TIMEZONE
+TIMEZONE=${TIMEZONE:-Asia/Kolkata}
+
+# ── Docker & Compose install ─────────────────────────
+if ! command -v docker >/dev/null; then
+    info "Installing Docker..."
+    curl -fsSL https://get.docker.com | bash || fail "Docker install failed"
+fi
+
+if ! command -v docker-compose >/dev/null; then
+    info "Installing Docker Compose..."
+    DC_VER=$(curl -s https://api.github.com/repos/docker/compose/releases/latest \
+             | grep '"tag_name":' | cut -d'"' -f4)
+    curl -L "https://github.com/docker/compose/releases/download/${DC_VER}/docker-compose-$(uname -s)-$(uname -m)" \
+         -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+fi
+
+# ── Docker Compose file ──────────────────────────────
+cat > docker-compose.yml << EOF
 version: "3.9"
 services:
-  $NAME:
-    image: $IMAGE
-    container_name: $NAME
-    hostname: $NAME
+  panel:
+    image: ubuntu:22.04
+    container_name: ptero-panel
+    hostname: panel
     privileged: true
-    stdin_open: true
-    tty: true
     restart: unless-stopped
     deploy:
       resources:
         limits:
-          memory: ${RAM}g
+          memory: ${RAM_GB}G
     ports:
-      - "$PORT:80"
+      - "${HOST_PORT}:80"
+    environment:
+      - TZ=${TIMEZONE}
 EOF
 
-    log "Starting container..."
-    docker-compose up -d || fail "Failed to start container"
+# ── Start container ───────────────────────────────────
+info "Starting container..."
+docker compose up -d || fail "Container start failed"
 
-    log "Installing SSH & essential packages..."
-    docker exec "$NAME" sh -c "
-apt update -y &&
-DEBIAN_FRONTEND=noninteractive apt install -y openssh-server sudo curl wget git &&
-mkdir -p /run/sshd &&
-echo 'root:root' | chpasswd &&
-sed -i 's/#PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config &&
-sed -i 's/#PasswordAuthentication yes/PasswordAuthentication yes/' /etc/ssh/sshd_config &&
-/usr/sbin/sshd
-"
+CONTAINER="ptero-panel"
 
-    read -rp "Admin Email [admin@gmail.com]: " EMAIL
-    read -rp "Admin Username [admin]: " USERNAME
-    read -rp "First Name [Admin]: " FIRSTNAME
-    read -rp "Last Name [Hosting]: " LASTNAME
-    read -rsp "Admin Password [admin@123]: " PASSWORD
-    echo
-    read -rp "Timezone [Asia/Kolkata]: " TIMEZONE
-    read -rp "Enter port [80]: " PORT
-    APP_URL="http://127.0.0.1:${PORT}"
-    read -rsp "Database Password [generate random]: " DB_PASSWORD
-    echo
-    [ -z "$DB_PASSWORD" ] && DB_PASSWORD=$(openssl rand -base64 16) && echo "Generated DB_PASSWORD: $DB_PASSWORD"
-    read -rsp "Database Root Password [generate random]: " MYSQL_ROOT_PASSWORD
-    echo
-    [ -z "$MYSQL_ROOT_PASSWORD" ] && MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16) && echo "Generated MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD"
+# ── Install Pterodactyl inside container ─────────────
+info "Installing Pterodactyl inside container (~5-10 min)..."
 
-    EMAIL="${EMAIL:-admin@gmail.com}"
-    USERNAME="${USERNAME:-admin}"
-    FIRSTNAME="${FIRSTNAME:-Admin}"
-    LASTNAME="${LASTNAME:-Hosting}"
-    PASSWORD="${PASSWORD:-admin@123}"
-    TIMEZONE="${TIMEZONE:-Asia/Kolkata}"
+docker exec -i "$CONTAINER" bash << EOF
+set -e
+export DEBIAN_FRONTEND=noninteractive
 
-    apt update && apt install -y curl apt-transport-https ca-certificates gnupg unzip git tar sudo lsb-release software-properties-common
+apt update -y && apt upgrade -y
+apt install -y software-properties-common curl apt-transport-https \
+               ca-certificates gnupg lsb-release unzip git tar sudo cron wget openssl
 
-    OS=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
-    if [[ "$OS" == "ubuntu" ]]; then
-        add-apt-repository -y ppa:ondrej/php
-    else
-        curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg
-        echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/sury-php.list
-    fi
+# PHP 8.3
+add-apt-repository -y ppa:ondrej/php || true
+apt update -y
+apt install -y php8.3 php8.3-{cli,fpm,mysql,mbstring,bcmath,xml,zip,curl,gd,intl,tokenizer,ctype,simplexml,dom}
 
-    curl -fsSL https://packages.redis.io/gpg | gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-    echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/redis.list
+# MariaDB + Redis + Nginx
+apt install -y mariadb-server redis-server nginx
 
-    apt update
-    apt install -y php8.3 php8.3-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype,simplexml,dom} mariadb-server nginx redis-server
-    curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+# Composer
+curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-    mkdir -p /var/www/pterodactyl
-    cd /var/www/pterodactyl
-    curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-    tar -xzvf panel.tar.gz
-    chmod -R 755 storage/* bootstrap/cache/
+# Pterodactyl Panel
+mkdir -p /var/www/pterodactyl
+cd /var/www/pterodactyl
+curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+tar -xzf panel.tar.gz
+rm panel.tar.gz
+chmod -R 755 storage/* bootstrap/cache
 
-    DB_NAME=panel
-    DB_USER=pterodactyl
-    DB_PASS="$DB_PASSWORD"
-    mariadb -e "CREATE USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';"
-    mariadb -e "CREATE DATABASE ${DB_NAME};"
-    mariadb -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1' WITH GRANT OPTION;"
-    mariadb -e "FLUSH PRIVILEGES;"
+# MariaDB setup
+service mariadb start
+DB_ROOT_PASS=\$(openssl rand -base64 16)
+mysql -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '\$DB_ROOT_PASS'; FLUSH PRIVILEGES;"
 
-    [ ! -f ".env.example" ] && curl -Lo .env.example https://raw.githubusercontent.com/pterodactyl/panel/develop/.env.example
-    cp .env.example .env
-    sed -i "s|APP_URL=.*|APP_URL=https://${DOMAIN}|g" .env
-    sed -i "s|DB_DATABASE=.*|DB_DATABASE=${DB_NAME}|g" .env
-    sed -i "s|DB_USERNAME=.*|DB_USERNAME=${DB_USER}|g" .env
-    sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|g" .env
-    echo "APP_ENVIRONMENT_ONLY=false" >> .env
+DB_NAME=panel
+DB_USER=pterodactyl
+DB_PASS=\$(openssl rand -base64 20 | tr -dc 'a-zA-Z0-9' | head -c 18)
 
-    COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
-    php artisan key:generate --force
-    php artisan migrate --seed --force
-    chown -R www-data:www-data /var/www/pterodactyl/*
-    apt install -y cron
-    systemctl enable --now cron
-    (crontab -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
+mysql -e "CREATE DATABASE \${DB_NAME};"
+mysql -e "CREATE USER '\${DB_USER}'@'127.0.0.1' IDENTIFIED BY '\${DB_PASS}';"
+mysql -e "GRANT ALL PRIVILEGES ON \${DB_NAME}.* TO '\${DB_USER}'@'127.0.0.1'; FLUSH PRIVILEGES;"
 
-    mkdir -p /etc/certs/panel
-    cd /etc/certs/panel
-    openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 -subj "/C=NA/ST=NA/L=NA/O=NA/CN=Generic SSL Certificate" -keyout privkey.pem -out fullchain.pem
+echo "\$DB_PASS" > /tmp/dbpass.txt
 
-    tee /etc/nginx/sites-available/pterodactyl.conf > /dev/null << EOF
+# .env setup
+curl -Lo .env.example https://raw.githubusercontent.com/pterodactyl/panel/develop/.env.example
+cp .env.example .env
+
+sed -i "s|^APP_URL=.*|APP_URL=https://${DOMAIN}|g" .env
+sed -i "s|^DB_HOST=.*|DB_HOST=127.0.0.1|g" .env
+sed -i "s|^DB_DATABASE=.*|DB_DATABASE=\${DB_NAME}|g" .env
+sed -i "s|^DB_USERNAME=.*|DB_USERNAME=\${DB_USER}|g" .env
+sed -i "s|^DB_PASSWORD=.*|DB_PASSWORD=\${DB_PASS}|g" .env
+
+echo 'APP_ENV=production' >> .env
+echo 'APP_DEBUG=false' >> .env
+
+composer install --no-dev --optimize-autoloader
+php artisan key:generate --force
+php artisan p:environment:setup --no-interaction || true
+php artisan migrate --seed --force
+
+chown -R www-data:www-data /var/www/pterodactyl
+chmod -R 755 storage/* bootstrap/cache
+
+# Cron
+echo '* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1' | crontab -
+
+# Self-signed SSL
+mkdir -p /etc/certs/panel
+openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
+    -subj "/C=XX/ST=XX/L=XX/O=XX/CN=${DOMAIN}" \
+    -keyout /etc/certs/panel/privkey.pem -out /etc/certs/panel/fullchain.pem
+
+# Nginx config
+cat > /etc/nginx/sites-available/pterodactyl << 'NGX'
 server {
     listen 80;
     server_name ${DOMAIN};
     return 301 https://\$server_name\$request_uri;
 }
+
 server {
     listen 443 ssl http2;
     server_name ${DOMAIN};
+
     root /var/www/pterodactyl/public;
     index index.php;
+
     ssl_certificate /etc/certs/panel/fullchain.pem;
     ssl_certificate_key /etc/certs/panel/privkey.pem;
-    client_max_body_size 100m;
-    client_body_timeout 120s;
-    sendfile off;
+
+    client_max_body_size 100M;
+
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
     }
+
     location ~ \.php\$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)\$;
         fastcgi_pass unix:/run/php/php8.3-fpm.sock;
         fastcgi_index index.php;
-        include /etc/nginx/fastcgi_params;
-        fastcgi_param PHP_VALUE \"upload_max_filesize=100M \n post_max_size=100M\";
+        include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param PHP_VALUE "upload_max_filesize=100M \n post_max_size=100M";
     }
+
     location ~ /\.ht {
         deny all;
     }
 }
-EOF
+NGX
 
-ln -s /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/ || true
-nginx -t && systemctl restart nginx
+ln -sf /etc/nginx/sites-available/pterodactyl /etc/nginx/sites-enabled/
+rm -f /etc/nginx/sites-enabled/default
+nginx -t && service nginx restart
 
-tee /etc/systemd/system/pteroq.service > /dev/null << 'EOF'
+# Queue worker
+cat > /etc/systemd/system/pteroq.service << 'SRV'
 [Unit]
 Description=Pterodactyl Queue Worker
 After=redis-server.service
+
 [Service]
 User=www-data
 Group=www-data
 Restart=always
 ExecStart=/usr/bin/php /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
-RestartSec=5s
+RestartSec=5
+
 [Install]
 WantedBy=multi-user.target
-EOF
+SRV
 
 systemctl daemon-reload
-systemctl enable --now redis-server
-systemctl enable --now pteroq.service
+systemctl enable --now redis-server pteroq.service mariadb nginx cron php8.3-fpm
 
-cd /var/www/pterodactyl
-printf 'yes\n%s\n%s\n%s\n%s\n%s\n' "$EMAIL" "$USERNAME" "$FIRSTNAME" "$LASTNAME" "$PASSWORD" | php artisan p:user:make
+# Create admin user
+printf 'yes\n${ADMIN_EMAIL}\n${ADMIN_USER}\nAdmin\nHosting\n${ADMIN_PASS}\n' | php artisan p:user:make
 
-echo -e "\e[1;32m✔ Pterodactyl Panel Setup Complete!\e[0m"
-echo "Access panel at: https://${DOMAIN}"
-}
+EOF
 
-install_panel
+# ── Final output ─────────────────────────────────────────
+clear
+DB_PASS=$(docker exec "$CONTAINER" cat /tmp/dbpass.txt || echo "unknown")
+
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "  Pterodactyl Panel (Docker) Ready!        "
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}\n"
+
+echo -e "🌐 Access:            ${YELLOW}http://${DOMAIN}  (or https if you fix cert)${NC}"
+echo -e "   → from host:       ${YELLOW}http://localhost:${HOST_PORT}${NC}"
+echo -e "👤 Admin:             ${YELLOW}${ADMIN_USER} / ${ADMIN_PASS}${NC}"
+echo -e "🔑 DB:                ${YELLOW}pterodactyl / ${DB_PASS}${NC}\n"
+
+echo -e "${YELLOW}Notes:${NC}"
+echo " • Single-container setup (MariaDB + Redis + PHP + Nginx inside one)"
+echo " • For production: use multi-container & real SSL (certbot)"
+echo " • Enter container:  docker exec -it ptero-panel bash"
+echo " • Logs:              docker logs ptero-panel"
+echo " • Stop:              docker compose down"
+
+ok "KS Warrior setup finished!"
