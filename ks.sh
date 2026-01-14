@@ -125,10 +125,6 @@ echo Updating system
 apt update -y
 apt upgrade -y
 
-echo Updating system
-apt update -y
-apt upgrade -y
-
 echo Installing base dependencies
 apt install -y ca-certificates apt-transport-https software-properties-common lsb-release \
 curl wget tar unzip git gnupg2
@@ -139,12 +135,10 @@ add-apt-repository -y ppa:ondrej/php
 echo Updating package list
 apt update -y
 
-echo Installing PHP 8.3 and extensions
+echo Installing PHP 8.3 and required extensions
 apt install -y \
-php8.3 php8.3-cli php8.3-fpm \
-php8.3-openssl php8.3-gd php8.3-mysql php8.3-pdo \
-php8.3-mbstring php8.3-tokenizer php8.3-bcmath \
-php8.3-xml php8.3-dom php8.3-curl php8.3-zip
+php8.3 php8.3-cli php8.3-fpm php8.3-mysql php8.3-zip php8.3-bcmath \
+php8.3-xml php8.3-mbstring php8.3-curl php8.3-gd php8.3-intl php8.3-opcache
 
 echo Installing database and cache
 apt install -y mariadb-server redis-server
