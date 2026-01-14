@@ -1,17 +1,6 @@
 #!/bin/bash
-set -Eeuo pipefail
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
-
-[ "$EUID" -ne 0 ] && echo -e "${RED}[✖] Run this script as root${NC}" && exit 1
-
-
-install_panel() {
-    # ------------------- Colors -------------------
-    GREEN="\e[32m"
+GREEN="\e[32m"
     RED="\e[31m"
     YELLOW="\e[33m"
     NC="\e[0m"
@@ -99,42 +88,11 @@ EOF
     docker-compose up -d || fail "Failed to start container"
 
     # ------------------- Install SSH & Essential Packages -------------------
-    log "Enter inside container..."
-    docker exec ks-ptero-panel bash -c "
-
+    log "Installing SSH and essential packages inside container..."
+    docker exec "$NAME" sh -c "
+    
 clear
 read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
-read -rp "Admin Email [admin@gmail.com]: " EMAIL
-    read -rp "Admin Username [admin]: " USERNAME
-    read -rp "First Name [Admin]: " FIRSTNAME
-    read -rp "Last Name [Hosting]: " LASTNAME
-    read -rsp "Admin Password [admin@123]: " PASSWORD
-    echo
-    read -rp "Timezone [Asia/Kolkata]: " TIMEZONE
-    read -rp "Enter port [80]: " PORT
-    APP_URL="http://127.0.0.1:${PORT}"
-    read -rsp "Database Password [generate random]: " DB_PASSWORD
-    echo
-    if [ -z "$DB_PASSWORD" ]; then
-        DB_PASSWORD=$(openssl rand -base64 16)
-        echo "Generated DB_PASSWORD: $DB_PASSWORD"
-    fi
-
-    read -rsp "Database Root Password [generate random]: " MYSQL_ROOT_PASSWORD
-    echo
-    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-        MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16)
-        echo "Generated MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD"
-    fi
-
-
-EMAIL="${EMAIL:-admin@gmail.com}"
-USERNAME="${USERNAME:-admin}"
-FIRSTNAME="${FIRSTNAME:-Admin}"
-LASTNAME="${LASTNAME:-Hosting}"
-PASSWORD="${PASSWORD:-admin@123}"
-TIMEZONE="${TIMEZONE:-Asia/Kolkata}"
-
 
 
 # --- Dependencies ---
@@ -284,163 +242,8 @@ systemctl enable --now pteroq.service
 clear
 # --- Admin User ---
 cd /var/www/pterodactyl
-printf 'yes\n${EMAIL}\n${USERNAME}\n${FIRSTNAME}\n${LASTNAME}\n${PASSWORD}\n' | php artisan p:user:make 
+php artisan p:user:make 
+
 sed -i '/^APP_ENVIRONMENT_ONLY=/d' .env
 echo "APP_ENVIRONMENT_ONLY=false" >> .env
-
-# --- Animated Info ---
-echo -e "\n\e[1;32m✔ Pterodactyl Panel Setup Complete!\e[0m"
-echo -ne "\e[1;34mFinalizing installation"
-for i in {1..5}; do
-    echo -n "."
-    sleep 0.5
-done
-echo -e "\n"
-
-echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
-echo -e "\e[1;36m  ✅ Installation Completed Successfully! \e[0m"
-echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
-echo -e "\e[1;32m  🌐 Your Panel URL: \e[1;37mhttps://${DOMAIN}\e[0m"
-echo -e "\e[1;32m  📂 Panel Directory: \e[1;37m/var/www/pterodactyl\e[0m"
-echo -e "\e[1;32m  🛠 Create Admin: \e[1;37mphp artisan p:user:make\e[0m"
-echo -e "\e[1;32m  🔑 DB User: \e[1;37m${DB_USER}\e[0m"
-echo -e "\e[1;32m  🔑 DB Password: \e[1;37m${DB_PASS}\e[0m"
-echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
-echo -e "\e[1;35m  🎉 Enjoy your Pterodactyl Panel! \e[0m"
 "
-}
-
-install_wings() {
-    clear
-
-    read -p "Enter your server timezone [Asia/Kolkata]: " TIMEZONE
-    TIMEZONE=${TIMEZONE:-Asia/Kolkata}
-
-    WINGS_DIR="$HOME/ks/pterodactyl/wings"
-    mkdir -p "$WINGS_DIR"
-    cd "$WINGS_DIR" || exit 1
-
-    cat > ks-pterodactyl-wings.yml <<EOF
-version: '3.8'
-
-services:
-  ks-pterodactyl-wings-vm:
-    image: ghcr.io/pterodactyl/wings:latest
-    container_name: ks-pterodactyl-wings-vm
-    restart: unless-stopped
-    environment:
-      TZ: "${TIMEZONE}"
-    ports:
-      - "8080:8080"
-      - "2022:2022"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./ks-wings-config.yml:/etc/pterodactyl/config.yml
-      - /var/lib/pterodactyl:/var/lib/pterodactyl
-      - /var/log/pterodactyl:/var/log/pterodactyl
-    networks:
-      - ptero-net
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-networks:
-  ptero-net:
-    driver: bridge
-EOF
-
-    echo -e "${YELLOW}[•] Starting Pterodactyl Wings...${NC}"
-    docker-compose -f ks-pterodactyl-wings.yml up -d
-
-    echo
-    echo -e "${GREEN}✔ Pterodactyl Wings installed successfully!${NC}"
-    echo -e "${GREEN}Mode     : VM (Docker)${NC}"
-    echo -e "${YELLOW}Logs     : docker logs -f ks-pterodactyl-wings-vm${NC}"
-}
-
-
-
-tunnel_setup() {
-    read -p "Enter Port: " PORT
-    read -p "Enter subdomain (wings name): " NAME
-}
-
-config_file() {
-    YML_DIR="$HOME/ks/pterodactyl/wings"
-
-    if [ ! -d "$YML_DIR" ]; then
-        echo -e "\033[0;31m[✖] Wings folder not found!"
-        echo -e "[!] Either you didn't install Pterodactyl Wings using my installer"
-        echo -e "    or the installation is incomplete/corrupted.${NC}"
-        return 1
-    fi
-
-    cd "$YML_DIR" || return 1
-
-    echo -e "\033[1;33mEnter your Wings configuration:${NC}"
-    echo -e "\033[1;33mType 'KS' on a new line and press ENTER to save.${NC}"
-
-    CONFIG=""
-    while IFS= read -r line; do
-        [[ "$line" == "KS" ]] && break
-        CONFIG+="$line"$'\n'
-    done
-
-    if [ -z "$CONFIG" ]; then
-        echo -e "\033[0;31m[✖] No configuration provided. Exiting.${NC}"
-        return 1
-    fi
-
-    cat > ks-wings-config.yml <<EOF
-$CONFIG
-EOF
-
-    echo -e "\033[0;32m✔ Configuration saved successfully to $YML_DIR/ks-pterodactyl-wings.yml${NC}"
-}
-
-clear
-echo -e "${YELLOW}"
-echo "════════════════════════════════════"
-echo "   KS Warrior • Pterodactyl Installer"
-echo "════════════════════════════════════"
-echo -e "${NC}"
-
-echo "1) Install Panel"
-echo "2) Install Wings"
-echo "3) Install Panel + Wings"
-echo "4) Free Tunnel (For connect wings to panel)"
-echo "5) Add Wings Config"
-echo
-read -rp "Select an option [1-3]: " OPTION
-
-case "$OPTION" in
-  1)
-    echo -e "${GREEN}Installing Pterodactyl Panel...${NC}"
-    install_panel
-    ;;
-  2)
-    echo -e "${GREEN}Installing Pterodactyl Wings...${NC}"
-    install_wings && config_file
-    ;;
-  3)
-    echo -e "${GREEN}Installing Panel and Wings...${NC}"
-    install_panel && install_wings && config_file
-    ;;
-  4)
-    echo -e "${GREEN}Installing Instatunnel...${NC}"
-    tunnel_setup
-    ;;
-  5)
-    echo -e "${GREEN}Wings Configuration Adding...${NC}"
-    config_file
-    ;;
-  *)
-    echo -e "${RED}Invalid option. Exiting.${NC}"
-    exit 1
-    ;;
-esac
-
-echo -e "${GREEN}✔ Installation process finished${NC}"
