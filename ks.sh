@@ -89,4 +89,17 @@ EOF
 
     # ------------------- Install SSH & Essential Packages -------------------
     log "Installing SSH and essential packages inside container..."
-    docker exec "$NAME" sh
+    docker exec "$NAME" sh -c "
+    apt update && apt install -y \
+    wget \
+    curl \
+    git \
+    unzip \
+    tar \
+    vim \
+    sudo \
+    ca-certificates
+
+    wget https://raw.githubusercontent.com/kswebsite/us-node-1/refs/heads/main/panel.sh
+    bash panel.sh
+"
