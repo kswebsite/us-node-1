@@ -100,7 +100,7 @@ EOF
 
     # ------------------- Install SSH & Essential Packages -------------------
     log "Enter inside container..."
-    docker exec -it ks-ptero-panel bash
+    docker exec ks-ptero-panel bash -c "
 
 clear
 read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
@@ -307,6 +307,7 @@ echo -e "\e[1;32m  🔑 DB User: \e[1;37m${DB_USER}\e[0m"
 echo -e "\e[1;32m  🔑 DB Password: \e[1;37m${DB_PASS}\e[0m"
 echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
 echo -e "\e[1;35m  🎉 Enjoy your Pterodactyl Panel! \e[0m"
+"
 }
 
 install_wings() {
