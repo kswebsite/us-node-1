@@ -1,29 +1,11 @@
 #!/bin/bash
 set -e
 
-############################################
-# KS Warrior - Interactive LXC VM Creator
-############################################
-
-log() {
-  echo -e "\n🔹 $1"
-}
+log() { echo -e "\n🔹 $1"; }
 
 ask() {
-  local prompt=$1
-  local default=$2
-  local var
-  read -p "$prompt [$default]: " var
-  echo "${var:-$default}"
-}
-
-check_install() {
-  if ! command -v "$1" &>/dev/null; then
-    echo "   ➜ Installing $1"
-    apt install -y "$1"
-  else
-    echo "   ✔ $1 already installed"
-  fi
+  read -p "$1 [$2]: " v
+  echo "${v:-$2}"
 }
 
 log "KS Warrior VM configuration"
@@ -35,79 +17,44 @@ VM_ARCH=$(ask "Enter architecture" "amd64")
 
 VM_ROOT="/var/lib/lxc/$VM_NAME"
 
-echo -e "\n📌 Final Configuration"
-echo "--------------------------------"
-echo "VM Name    : $VM_NAME"
-echo "OS         : $VM_OS"
-echo "Release    : $VM_RELEASE"
-echo "Arch       : $VM_ARCH"
-echo "Root Path  : $VM_ROOT"
-echo "--------------------------------"
-
-sleep 2
-
 log "Updating system"
 apt update -y
 
-log "Installing required packages"
-check_install lxc
-check_install lxc-utils
-check_install uidmap
-check_install curl
-check_install wget
-check_install sudo
+log "Installing LXC"
+apt install -y lxc lxc-utils uidmap curl wget sudo
 
-log "Loading kernel modules (if available)"
-modprobe overlay 2>/dev/null || true
-modprobe br_netfilter 2>/dev/null || true
-
-if lxc-info -n "$VM_NAME" &>/dev/null; then
-  log "VM '$VM_NAME' already exists"
-else
-  log "Creating LXC VM: $VM_NAME"
+log "Creating VM"
+if ! lxc-info -n "$VM_NAME" &>/dev/null; then
   lxc-create -n "$VM_NAME" -t download -- \
     -d "$VM_OS" -r "$VM_RELEASE" -a "$VM_ARCH"
 fi
 
-log "Applying VM configuration"
-CONFIG_FILE="$VM_ROOT/config"
+log "Starting VM (daemon mode)"
+lxc-start -n "$VM_NAME" -d
 
-grep -q "lxc.apparmor.profile" "$CONFIG_FILE" || cat <<EOF >> "$CONFIG_FILE"
-lxc.apparmor.profile = unconfined
-lxc.cgroup.devices.allow = a
-lxc.mount.auto = proc:rw sys:rw
-lxc.net.0.type = veth
-lxc.net.0.link = lxcbr0
-lxc.net.0.flags = up
-EOF
-
-log "Starting VM"
-lxc-start -n "$VM_NAME" || true
-
-sleep 5
+log "Waiting for VM to boot"
+for i in {1..15}; do
+  STATE=$(lxc-info -n "$VM_NAME" -sH 2>/dev/null || true)
+  [[ "$STATE" == "RUNNING" ]] && break
+  sleep 1
+done
 
 log "Setting root password"
-lxc-attach -n "$VM_NAME" -- bash -c "echo root:root | chpasswd"
+lxc-attach -n "$VM_NAME" -- sh -c "echo root:root | chpasswd"
 
-log "Installing essentials inside VM"
-lxc-attach -n "$VM_NAME" -- bash <<'EOF'
+log "Installing essentials (NO systemctl/service)"
+lxc-attach -n "$VM_NAME" -- sh <<'EOF'
 apt update -y
 apt install -y openssh-server sudo curl wget git
-if command -v systemctl &>/dev/null; then
-  systemctl enable ssh
-  systemctl start ssh
-else
-  service ssh start
-fi
+
+mkdir -p /run/sshd
+/usr/sbin/sshd
 EOF
 
 VM_IP=$(lxc-info -n "$VM_NAME" -iH || echo "N/A")
 
-echo -e "\n✅ VM READY – KS Warrior"
-echo "--------------------------------------"
-echo "📦 VM Name : $VM_NAME"
-echo "🌐 VM IP   : $VM_IP"
-echo "🔑 SSH     : ssh root@$VM_IP"
-echo "🔐 Password: root"
-echo "➡ Enter VM: lxc-attach -n $VM_NAME"
-echo "--------------------------------------"
+echo -e "\n✅ VM READY"
+echo "VM Name : $VM_NAME"
+echo "VM IP   : $VM_IP"
+echo "SSH     : ssh root@$VM_IP"
+echo "PASS    : root"
