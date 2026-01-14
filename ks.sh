@@ -191,9 +191,9 @@ tar -xzf panel.tar.gz
 chmod -R 775 storage bootstrap/cache
 chown -R www-data:www-data storage bootstrap/cache
 
-echo Installing PHP dependencies
+echo "Installing PHP dependencies"
 export COMPOSER_ALLOW_SUPERUSER=1
-php -d memory_limit=-1 /usr/bin/composer install --no-dev --optimize-autoloader
+/usr/local/bin/composer install --no-dev --optimize-autoloader
 
 echo Environment setup
 cp .env.example .env
