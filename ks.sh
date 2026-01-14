@@ -121,60 +121,46 @@ PASSWORD="${PASSWORD:-admin@123}"
 TIMEZONE="${TIMEZONE:-Asia/Kolkata}"
 PORT="${PORT:-80}"
 
-echo Updating system
-apt update -y
-apt upgrade -y
+echo "Updating system"
+apt update -y && apt upgrade -y
 
-echo Installing base dependencies
-apt install -y ca-certificates apt-transport-https software-properties-common lsb-release \
-curl wget tar unzip git gnupg2
+echo "Installing base dependencies"
+apt install -y ca-certificates apt-transport-https software-properties-common \
+lsb-release curl wget tar unzip git gnupg2
 
-echo Adding PHP repository
+echo "Adding PHP repository"
 add-apt-repository -y ppa:ondrej/php
-
-echo Updating package list
 apt update -y
 
-echo Installing PHP 8.3 and required extensions
+echo "Installing PHP 8.3 + required extensions"
 apt install -y \
-php8.3 php8.3-cli php8.3-fpm php8.3-mysql php8.3-zip php8.3-bcmath \
-php8.3-xml php8.3-mbstring php8.3-curl php8.3-gd php8.3-intl php8.3-opcache
+php8.3 php8.3-cli php8.3-fpm \
+php8.3-mysql php8.3-pdo php8.3-zip php8.3-bcmath \
+php8.3-xml php8.3-mbstring php8.3-curl php8.3-gd \
+php8.3-intl php8.3-opcache php8.3-sodium \
+php8.3-fileinfo php8.3-exif php8.3-pcntl php8.3-posix
 
-echo Installing database and cache
-apt install -y mariadb-server redis-server
+echo "Installing services"
+apt install -y mariadb-server redis-server nginx
 
-echo Installing web server
-apt install -y nginx
+echo "Installing Composer"
+curl -sS https://getcomposer.org/installer | php -- \
+--install-dir=/usr/local/bin --filename=composer
 
-echo Installing Composer v2
-curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+echo "Starting services"
+systemctl enable --now redis-server mariadb php8.3-fpm nginx
 
-echo Starting Redis
-redis-server --daemonize yes
-
-echo Starting MariaDB
-mysqld_safe --datadir=/var/lib/mysql &
-
-sleep 5
-
-echo Starting PHP-FPM
-php-fpm8.3 -D
-
-echo Starting NGINX
-nginx
-
-echo Verifying installations
+echo "Verifying installations"
 php -v
+php -m | grep -E "pdo_mysql|zip|bcmath|sodium"
 composer --version
 mysql --version
 redis-server --version
 nginx -v
 
-echo Installation completed successfully
-
-echo Creating database
+echo "Creating database"
 DB_PASS=$(openssl rand -base64 16)
-mysql <<EOF
+mysql -u root <<EOF
 CREATE DATABASE IF NOT EXISTS panel;
 CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY '$DB_PASS';
 CREATE USER IF NOT EXISTS 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
@@ -183,9 +169,9 @@ GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';
 FLUSH PRIVILEGES;
 EOF
 
-echo Downloading panel
+echo "Downloading Pterodactyl Panel"
 mkdir -p /var/www/pterodactyl
-cd /var/www/pterodactyl || exit
+cd /var/www/pterodactyl
 curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
 tar -xzf panel.tar.gz
 chmod -R 775 storage bootstrap/cache
@@ -193,12 +179,11 @@ chown -R www-data:www-data storage bootstrap/cache
 
 echo "Installing PHP dependencies"
 export COMPOSER_ALLOW_SUPERUSER=1
-/usr/local/bin/composer install --no-dev --optimize-autoloader
+composer install --no-dev --optimize-autoloader
 
-echo Environment setup
+echo "Environment setup"
 cp .env.example .env
 chown www-data:www-data .env
-
 php artisan key:generate --force
 
 php artisan p:environment:setup \
@@ -218,12 +203,10 @@ php artisan p:environment:database \
 
 php artisan migrate --seed --force
 
-printf 'yes\n${EMAIL}\n${USERNAME}\n${FIRSTNAME}\n${LASTNAME}\n${PASSWORD}\n' | php artisan p:user:make
-
-echo Setting permissions
+echo "Fixing permissions"
 chown -R www-data:www-data /var/www/pterodactyl
 
-echo Nginx configuration
+echo "NGINX configuration"
 cat > /etc/nginx/conf.d/pterodactyl.conf <<EOF
 server {
     listen 80;
@@ -240,25 +223,39 @@ server {
     location ~ \.php\$ {
         include fastcgi_params;
         fastcgi_index index.php;
-        fastcgi_pass unix:/run/php/php8.2-fpm.sock;
-        fastcgi_buffers 16 16k;
-        fastcgi_buffer_size 32k;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
     }
 }
 EOF
 
-nginx -s reload
+nginx -t && systemctl reload nginx
 
-echo Starting queue worker
-nohup bash -c "while true; do php /var/www/pterodactyl/artisan queue:work --sleep=3 --tries=3 --timeout=90; sleep 5; done" >/dev/null 2>&1 &
+echo "Setting up queue worker (systemd)"
+cat > /etc/systemd/system/pteroq.service <<EOF
+[Unit]
+Description=Pterodactyl Queue Worker
+After=redis-server.service
 
-echo Setting cron
-(crontab -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
+[Service]
+User=www-data
+Group=www-data
+Restart=always
+ExecStart=/usr/bin/php /var/www/pterodactyl/artisan queue:work --sleep=3 --tries=3 --timeout=90
 
-echo Pterodactyl Panel Installed Successfully
-echo Access panel on port 80
-echo Database password: $DB_PASS
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now pteroq
+
+echo "Setting cron"
+(crontab -u www-data -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -u www-data -
+
+echo "✅ Pterodactyl Panel Installed Successfully"
+echo "URL: http://<your-server-ip>"
+echo "DB Password: $DB_PASS"
     
 }
 
