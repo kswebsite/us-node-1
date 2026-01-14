@@ -125,30 +125,58 @@ echo Updating system
 apt update -y
 apt upgrade -y
 
-echo Installing required packages
+echo Updating system
 apt update -y
-apt install -y software-properties-common ca-certificates lsb-release apt-transport-https curl
-add-apt-repository ppa:ondrej/php -y
+apt upgrade -y
+
+echo Installing base dependencies
+apt install -y ca-certificates apt-transport-https software-properties-common lsb-release \
+curl wget tar unzip git gnupg2
+
+echo Adding PHP repository
+add-apt-repository -y ppa:ondrej/php
+
+echo Updating package list
 apt update -y
-apt install -y curl wget tar unzip git redis-server mariadb-server nginx composer \
-php8.2 php8.2-cli php8.2-fpm php8.2-mysql php8.2-zip php8.2-bcmath php8.2-xml \
-php8.2-mbstring php8.2-curl php8.2-gd php8.2-intl php8.2-tokenizer \
-php8.2-redis php8.2-posix php8.2-pcntl php8.2-opcache php8.2-fileinfo php8.2-exif
 
-echo Starting redis
-redis-cli ping >/dev/null 2>&1 || redis-server --daemonize yes
+echo Installing PHP 8.3 and extensions
+apt install -y \
+php8.3 php8.3-cli php8.3-fpm \
+php8.3-openssl php8.3-gd php8.3-mysql php8.3-pdo \
+php8.3-mbstring php8.3-tokenizer php8.3-bcmath \
+php8.3-xml php8.3-dom php8.3-curl php8.3-zip
 
-echo Starting mysql
+echo Installing database and cache
+apt install -y mariadb-server redis-server
+
+echo Installing web server
+apt install -y nginx
+
+echo Installing Composer v2
+curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+echo Starting Redis
+redis-server --daemonize yes
+
+echo Starting MariaDB
 mysqld_safe --datadir=/var/lib/mysql &
-until mysqladmin ping --silent; do
-  sleep 1
-done
 
-echo Starting php-fpm
-php-fpm8.2 -D
+sleep 5
 
-echo Starting nginx
+echo Starting PHP-FPM
+php-fpm8.3 -D
+
+echo Starting NGINX
 nginx
+
+echo Verifying installations
+php -v
+composer --version
+mysql --version
+redis-server --version
+nginx -v
+
+echo Installation completed successfully
 
 echo Creating database
 DB_PASS=$(openssl rand -base64 16)
