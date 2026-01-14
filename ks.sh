@@ -1,417 +1,113 @@
 #!/bin/bash
-set -Eeuo pipefail
+set -e
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-NC='\033[0m'
+############################################
+# KS Warrior - Interactive LXC VM Creator
+############################################
 
-[ "$EUID" -ne 0 ] && echo -e "${RED}[✖] Run this script as root${NC}" && exit 1
-
-
-
-install_docker() {
-
-    ok()   { echo -e "${GREEN}[✔] $1${NC}"; }
-    fail() { echo -e "${RED}[✖] $1${NC}"; exit 1; }
-    info() { echo -e "${YELLOW}[… ] $1${NC}"; }
-
-    # Root check
-    [ "$EUID" -ne 0 ] && fail "Run as root"
-
-    info "Checking Docker"
-
-    if command -v docker >/dev/null 2>&1; then
-        ok "Docker already installed"
-    else
-        info "Updating APT"
-        apt update -y >/dev/null || fail "APT update failed"
-        ok "APT updated"
-
-        info "Installing dependencies"
-        apt install -y ca-certificates curl gnupg lsb-release >/dev/null \
-            || fail "Dependency install failed"
-        ok "Dependencies installed"
-
-        info "Preparing keyrings"
-        install -m 0755 -d /etc/apt/keyrings || fail "Keyring creation failed"
-
-        info "Adding Docker GPG key"
-        curl -fsSL "https://download.docker.com/linux/$(. /etc/os-release && echo "$ID")/gpg" \
-            | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
-            || fail "GPG key failed"
-
-        chmod a+r /etc/apt/keyrings/docker.gpg
-        ok "Docker GPG key added"
-
-        info "Adding Docker repository"
-        echo \
-"deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-https://download.docker.com/linux/$(. /etc/os-release && echo "$ID") \
-$(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-        > /etc/apt/sources.list.d/docker.list \
-        || fail "Repo add failed"
-
-        ok "Docker repository added"
-
-        info "Updating Docker repo"
-        apt update -y >/dev/null || fail "Repo update failed"
-        ok "Docker repo updated"
-
-        info "Installing Docker"
-        apt install -y \
-            docker-ce \
-            docker-ce-cli \
-            containerd.io \
-            docker-buildx-plugin \
-            docker-compose-plugin \
-            >/dev/null || fail "Docker install failed"
-
-        ok "Docker installed"
-    fi
-
-    info "Checking Docker service"
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl enable --now docker >/dev/null 2>&1 || fail "Docker service failed"
-        ok "Docker service running"
-    else
-        ok "Systemd not available (skipped service check)"
-    fi
-
-    info "Checking Docker Compose v2"
-    docker compose version >/dev/null 2>&1 \
-        && ok "Docker Compose v2 available" \
-        || fail "Docker Compose missing"
-
-    ok "Docker setup complete"
+log() {
+  echo -e "\n🔹 $1"
 }
 
+ask() {
+  local prompt=$1
+  local default=$2
+  local var
+  read -p "$prompt [$default]: " var
+  echo "${var:-$default}"
+}
 
+check_install() {
+  if ! command -v "$1" &>/dev/null; then
+    echo "   ➜ Installing $1"
+    apt install -y "$1"
+  else
+    echo "   ✔ $1 already installed"
+  fi
+}
 
-install_panel() {
-    clear
-    read -rp "Admin Email [admin@gmail.com]: " EMAIL
-    read -rp "Admin Username [admin]: " USERNAME
-    read -rp "First Name [Admin]: " FIRSTNAME
-    read -rp "Last Name [Hosting]: " LASTNAME
-    read -rsp "Admin Password [admin@123]: " PASSWORD
-    read -rp "Timezone [Asia/Kolkata]: " TIMEZONE
-    read -rp "Enter port [80]: " PORT
-    APP_URL="http://127.0.0.1:${PORT}"
-    read -rsp "Database Password [generate random]: " DB_PASSWORD
-    echo
-    if [ -z "$DB_PASSWORD" ]; then
-        DB_PASSWORD=$(openssl rand -base64 16)
-        echo "Generated DB_PASSWORD: $DB_PASSWORD"
-    fi
+log "KS Warrior VM configuration"
 
-    read -rsp "Database Root Password [generate random]: " MYSQL_ROOT_PASSWORD
-    echo
-    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
-        MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16)
-        echo "Generated MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD"
-    fi
+VM_NAME=$(ask "Enter VM name" "fastvm")
+VM_OS=$(ask "Enter OS" "ubuntu")
+VM_RELEASE=$(ask "Enter OS release" "jammy")
+VM_ARCH=$(ask "Enter architecture" "amd64")
 
+VM_ROOT="/var/lib/lxc/$VM_NAME"
 
-EMAIL="${EMAIL:-admin@gmail.com}"
-USERNAME="${USERNAME:-admin}"
-FIRSTNAME="${FIRSTNAME:-Admin}"
-LASTNAME="${LASTNAME:-Hosting}"
-PASSWORD="${PASSWORD:-admin@123}"
-TIMEZONE="${TIMEZONE:-Asia/Kolkata}"
-PORT="${PORT:-80}"
+echo -e "\n📌 Final Configuration"
+echo "--------------------------------"
+echo "VM Name    : $VM_NAME"
+echo "OS         : $VM_OS"
+echo "Release    : $VM_RELEASE"
+echo "Arch       : $VM_ARCH"
+echo "Root Path  : $VM_ROOT"
+echo "--------------------------------"
 
-echo "Updating system"
-apt update -y && apt upgrade -y
+sleep 2
 
-echo "Installing base dependencies"
-apt install -y ca-certificates apt-transport-https software-properties-common \
-lsb-release curl wget tar unzip git gnupg2
-
-echo "Adding PHP repository"
-add-apt-repository -y ppa:ondrej/php
+log "Updating system"
 apt update -y
 
-echo "Installing PHP 8.3 + required extensions"
-apt install -y \
-php8.3 php8.3-cli php8.3-fpm \
-php8.3-mysql php8.3-pdo php8.3-zip php8.3-bcmath \
-php8.3-xml php8.3-mbstring php8.3-curl php8.3-gd \
-php8.3-intl php8.3-opcache php8.3-sodium \
-php8.3-fileinfo php8.3-exif php8.3-pcntl php8.3-posix
+log "Installing required packages"
+check_install lxc
+check_install lxc-utils
+check_install uidmap
+check_install curl
+check_install wget
+check_install sudo
 
-echo "Installing services"
-apt install -y mariadb-server redis-server nginx
+log "Loading kernel modules (if available)"
+modprobe overlay 2>/dev/null || true
+modprobe br_netfilter 2>/dev/null || true
 
-echo "Installing Composer"
-curl -sS https://getcomposer.org/installer | php -- \
---install-dir=/usr/local/bin --filename=composer
+if lxc-info -n "$VM_NAME" &>/dev/null; then
+  log "VM '$VM_NAME' already exists"
+else
+  log "Creating LXC VM: $VM_NAME"
+  lxc-create -n "$VM_NAME" -t download -- \
+    -d "$VM_OS" -r "$VM_RELEASE" -a "$VM_ARCH"
+fi
 
-echo "Starting services"
-systemctl enable --now redis-server mariadb php8.3-fpm nginx
+log "Applying VM configuration"
+CONFIG_FILE="$VM_ROOT/config"
 
-echo "Verifying installations"
-php -v
-php -m | grep -E "pdo_mysql|zip|bcmath|sodium"
-composer --version
-mysql --version
-redis-server --version
-nginx -v
-
-echo "Creating database"
-DB_PASS=$(openssl rand -base64 16)
-mysql -u root <<EOF
-CREATE DATABASE IF NOT EXISTS panel;
-CREATE USER IF NOT EXISTS 'pterodactyl'@'localhost' IDENTIFIED BY '$DB_PASS';
-CREATE USER IF NOT EXISTS 'pterodactyl'@'127.0.0.1' IDENTIFIED BY '$DB_PASS';
-GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'localhost';
-GRANT ALL PRIVILEGES ON panel.* TO 'pterodactyl'@'127.0.0.1';
-FLUSH PRIVILEGES;
+grep -q "lxc.apparmor.profile" "$CONFIG_FILE" || cat <<EOF >> "$CONFIG_FILE"
+lxc.apparmor.profile = unconfined
+lxc.cgroup.devices.allow = a
+lxc.mount.auto = proc:rw sys:rw
+lxc.net.0.type = veth
+lxc.net.0.link = lxcbr0
+lxc.net.0.flags = up
 EOF
 
-echo "Downloading Pterodactyl Panel"
-mkdir -p /var/www/pterodactyl
-cd /var/www/pterodactyl
-curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
-tar -xzf panel.tar.gz
-chmod -R 775 storage bootstrap/cache
-chown -R www-data:www-data storage bootstrap/cache
+log "Starting VM"
+lxc-start -n "$VM_NAME" || true
 
-echo "Installing PHP dependencies"
-export COMPOSER_ALLOW_SUPERUSER=1
-composer install --no-dev --optimize-autoloader
+sleep 5
 
-echo "Environment setup"
-cp .env.example .env
-chown www-data:www-data .env
-php artisan key:generate --force
+log "Setting root password"
+lxc-attach -n "$VM_NAME" -- bash -c "echo root:root | chpasswd"
 
-php artisan p:environment:setup \
---author=admin@example.com \
---url=http://localhost \
---timezone=UTC \
---cache=redis \
---session=redis \
---queue=redis
-
-php artisan p:environment:database \
---host=127.0.0.1 \
---port=3306 \
---database=panel \
---username=pterodactyl \
---password=$DB_PASS
-
-php artisan migrate --seed --force
-
-echo "Fixing permissions"
-chown -R www-data:www-data /var/www/pterodactyl
-
-echo "NGINX configuration"
-cat > /etc/nginx/conf.d/pterodactyl.conf <<EOF
-server {
-    listen 80;
-    server_name _;
-    root /var/www/pterodactyl/public;
-    index index.php;
-
-    client_max_body_size 100m;
-
-    location / {
-        try_files \$uri \$uri/ /index.php?\$query_string;
-    }
-
-    location ~ \.php\$ {
-        include fastcgi_params;
-        fastcgi_index index.php;
-        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
-        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
-    }
-}
+log "Installing essentials inside VM"
+lxc-attach -n "$VM_NAME" -- bash <<'EOF'
+apt update -y
+apt install -y openssh-server sudo curl wget git
+if command -v systemctl &>/dev/null; then
+  systemctl enable ssh
+  systemctl start ssh
+else
+  service ssh start
+fi
 EOF
 
-nginx -t && systemctl reload nginx
+VM_IP=$(lxc-info -n "$VM_NAME" -iH || echo "N/A")
 
-echo "Setting up queue worker (systemd)"
-cat > /etc/systemd/system/pteroq.service <<EOF
-[Unit]
-Description=Pterodactyl Queue Worker
-After=redis-server.service
-
-[Service]
-User=www-data
-Group=www-data
-Restart=always
-ExecStart=/usr/bin/php /var/www/pterodactyl/artisan queue:work --sleep=3 --tries=3 --timeout=90
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable --now pteroq
-
-echo "Setting cron"
-(crontab -u www-data -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -u www-data -
-
-echo "✅ Pterodactyl Panel Installed Successfully"
-echo "URL: http://<your-server-ip>"
-echo "DB Password: $DB_PASS"
-    
-}
-
-
-install_wings() {
-    clear
-
-    read -p "Enter your server timezone [Asia/Kolkata]: " TIMEZONE
-    TIMEZONE=${TIMEZONE:-Asia/Kolkata}
-
-    WINGS_DIR="$HOME/ks/pterodactyl/wings"
-    mkdir -p "$WINGS_DIR"
-    cd "$WINGS_DIR" || exit 1
-
-    cat > ks-pterodactyl-wings.yml <<EOF
-version: '3.8'
-
-services:
-  ks-pterodactyl-wings-vm:
-    image: ghcr.io/pterodactyl/wings:latest
-    container_name: ks-pterodactyl-wings-vm
-    restart: unless-stopped
-    environment:
-      TZ: "${TIMEZONE}"
-    ports:
-      - "8080:8080"
-      - "2022:2022"
-      - "443:443"
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./ks-wings-config.yml:/etc/pterodactyl/config.yml
-      - /var/lib/pterodactyl:/var/lib/pterodactyl
-      - /var/log/pterodactyl:/var/log/pterodactyl
-    networks:
-      - ptero-net
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-networks:
-  ptero-net:
-    driver: bridge
-EOF
-
-    echo -e "${YELLOW}[•] Starting Pterodactyl Wings...${NC}"
-    docker-compose -f ks-pterodactyl-wings.yml up -d
-
-    echo
-    echo -e "${GREEN}✔ Pterodactyl Wings installed successfully!${NC}"
-    echo -e "${GREEN}Mode     : VM (Docker)${NC}"
-    echo -e "${YELLOW}Logs     : docker logs -f ks-pterodactyl-wings-vm${NC}"
-}
-
-
-
-tunnel_setup() {
-    read -p "Enter Port: " PORT
-    read -p "Enter subdomain (wings name): " NAME
-
-    if [[ -z "$PORT" || -z "$NAME" ]]; then
-        echo -e "\033[0;31m[✖] Port or subdomain cannot be empty!${NC}"
-        return 1
-    fi
-
-    if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
-        echo -e "\033[0;31m[✖] Invalid port number!${NC}"
-        return 1
-    fi
-
-    if ! command -v it >/dev/null 2>&1; then
-        echo -e "\033[1;33m[•] Installing Instatunnel...${NC}"
-        curl -fsSL https://api.instatunnel.my/releases/install.sh | bash
-    fi
-
-    echo -e "\033[1;33m[•] Starting tunnel...${NC}"
-    it --port "$PORT" --name "$NAME"
-}
-
-config_file() {
-    YML_DIR="$HOME/ks/pterodactyl/wings"
-
-    if [ ! -d "$YML_DIR" ]; then
-        echo -e "\033[0;31m[✖] Wings folder not found!"
-        echo -e "[!] Either you didn't install Pterodactyl Wings using my installer"
-        echo -e "    or the installation is incomplete/corrupted.${NC}"
-        return 1
-    fi
-
-    cd "$YML_DIR" || return 1
-
-    echo -e "\033[1;33mEnter your Wings configuration:${NC}"
-    echo -e "\033[1;33mType 'KS' on a new line and press ENTER to save.${NC}"
-
-    CONFIG=""
-    while IFS= read -r line; do
-        [[ "$line" == "KS" ]] && break
-        CONFIG+="$line"$'\n'
-    done
-
-    if [ -z "$CONFIG" ]; then
-        echo -e "\033[0;31m[✖] No configuration provided. Exiting.${NC}"
-        return 1
-    fi
-
-    cat > ks-wings-config.yml <<EOF
-$CONFIG
-EOF
-
-    echo -e "\033[0;32m✔ Configuration saved successfully to $YML_DIR/ks-pterodactyl-wings.yml${NC}"
-}
-
-clear
-echo -e "${YELLOW}"
-echo "════════════════════════════════════"
-echo "   KS Warrior • Pterodactyl Installer"
-echo "════════════════════════════════════"
-echo -e "${NC}"
-
-echo "1) Install Panel"
-echo "2) Install Wings"
-echo "3) Install Panel + Wings"
-echo "4) Free Tunnel (For connect wings to panel)"
-echo "5) Add Wings Config"
-echo
-read -rp "Select an option [1-3]: " OPTION
-
-case "$OPTION" in
-  1)
-    echo -e "${GREEN}Installing Pterodactyl Panel...${NC}"
-    install_docker
-    install_panel
-    ;;
-  2)
-    echo -e "${GREEN}Installing Pterodactyl Wings...${NC}"
-    install_docker
-    install_wings && config_file
-    ;;
-  3)
-    echo -e "${GREEN}Installing Panel and Wings...${NC}"
-    install_docker
-    install_panel && install_wings && config_file
-    ;;
-  4)
-    echo -e "${GREEN}Installing Instatunnel...${NC}"
-    tunnel_setup
-    ;;
-  5)
-    echo -e "${GREEN}Wings Configuration Adding...${NC}"
-    config_file
-    ;;
-  *)
-    echo -e "${RED}Invalid option. Exiting.${NC}"
-    exit 1
-    ;;
-esac
-
-echo -e "${GREEN}✔ Installation process finished${NC}"
+echo -e "\n✅ VM READY – KS Warrior"
+echo "--------------------------------------"
+echo "📦 VM Name : $VM_NAME"
+echo "🌐 VM IP   : $VM_IP"
+echo "🔑 SSH     : ssh root@$VM_IP"
+echo "🔐 Password: root"
+echo "➡ Enter VM: lxc-attach -n $VM_NAME"
+echo "--------------------------------------"
