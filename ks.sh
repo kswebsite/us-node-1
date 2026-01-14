@@ -1,3 +1,121 @@
+clear
+read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
+read -rp "Admin Email [admin@gmail.com]: " EMAIL
+    read -rp "Admin Username [admin]: " USERNAME
+    read -rp "First Name [Admin]: " FIRSTNAME
+    read -rp "Last Name [Hosting]: " LASTNAME
+    read -rsp "Admin Password [admin@123]: " PASSWORD
+    echo
+    read -rp "Timezone [Asia/Kolkata]: " TIMEZONE
+    read -rp "Enter port [80]: " PORT
+    APP_URL="http://127.0.0.1:${PORT}"
+    read -rsp "Database Password [generate random]: " DB_PASSWORD
+    echo
+    if [ -z "$DB_PASSWORD" ]; then
+        DB_PASSWORD=$(openssl rand -base64 16)
+        echo "Generated DB_PASSWORD: $DB_PASSWORD"
+    fi
+
+    read -rsp "Database Root Password [generate random]: " MYSQL_ROOT_PASSWORD
+    echo
+    if [ -z "$MYSQL_ROOT_PASSWORD" ]; then
+        MYSQL_ROOT_PASSWORD=$(openssl rand -base64 16)
+        echo "Generated MYSQL_ROOT_PASSWORD: $MYSQL_ROOT_PASSWORD"
+    fi
+
+
+EMAIL="${EMAIL:-admin@gmail.com}"
+USERNAME="${USERNAME:-admin}"
+FIRSTNAME="${FIRSTNAME:-Admin}"
+LASTNAME="${LASTNAME:-Hosting}"
+PASSWORD="${PASSWORD:-admin@123}"
+TIMEZONE="${TIMEZONE:-Asia/Kolkata}"
+
+
+
+# --- Dependencies ---
+apt update && apt install -y curl apt-transport-https ca-certificates gnupg unzip git tar sudo lsb-release
+
+# Detect OS
+OS=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
+
+if [[ "$OS" == "ubuntu" ]]; then
+    echo "✅ Detected Ubuntu. Adding PPA for PHP..."
+    apt install -y software-properties-common
+    LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
+elif [[ "$OS" == "debian" ]]; then
+    echo "✅ Detected Debian. Skipping PPA and adding PHP repo manually..."
+    # Add SURY PHP repo for Debian
+    curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg
+    echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/sury-php.list
+fi
+
+# Add Redis GPG key and repo
+curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
+echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
+
+apt update
+
+# --- Install PHP + extensions ---
+apt install -y php8.3 php8.3-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype,simplexml,dom} mariadb-server nginx redis-server
+
+# --- Install Composer ---
+curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
+
+# --- Download Pterodactyl Panel ---
+mkdir -p /var/www/pterodactyl
+cd /var/www/pterodactyl
+curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+tar -xzvf panel.tar.gz
+chmod -R 755 storage/* bootstrap/cache/
+
+# --- MariaDB Setup ---
+DB_NAME=panel
+DB_USER=pterodactyl
+DB_PASS=yourPassword
+mariadb -e "CREATE USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';"
+mariadb -e "CREATE DATABASE ${DB_NAME};"
+mariadb -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1' WITH GRANT OPTION;"
+mariadb -e "FLUSH PRIVILEGES;"
+
+# --- .env Setup ---
+if [ ! -f ".env.example" ]; then
+    curl -Lo .env.example https://raw.githubusercontent.com/pterodactyl/panel/develop/.env.example
+fi
+cp .env.example .env
+sed -i "s|APP_URL=.*|APP_URL=https://${DOMAIN}|g" .env
+sed -i "s|DB_DATABASE=.*|DB_DATABASE=${DB_NAME}|g" .env
+sed -i "s|DB_USERNAME=.*|DB_USERNAME=${DB_USER}|g" .env
+sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|g" .env
+if ! grep -q "^APP_ENVIRONMENT_ONLY=" .env; then
+    echo "APP_ENVIRONMENT_ONLY=false" >> .env
+fi
+
+# --- Install PHP dependencies ---
+echo "✅ Installing PHP dependencies..."
+COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
+
+# --- Generate Application Key ---
+echo "✅ Generating application key..."
+php artisan key:generate --force
+
+# --- Run Migrations ---
+php artisan migrate --seed --force
+
+# --- Permissions ---
+chown -R www-data:www-data /var/www/pterodactyl/*
+apt install -y cron
+systemctl enable --now cron
+(crontab -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
+# --- Nginx Setup ---
+mkdir -p /etc/certs/panel
+cd /etc/certs/panel
+openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
+-subj "/C=NA/ST=NA/L=NA/O=NA/CN=Generic SSL Certificate" \
+-keyout privkey.pem -out fullchain.pem
+
+tee /etc/nginx/sites-available/pterodactyl.conf > /dev/null << EOF
+server {
     listen 80;
     server_name ${DOMAIN};
     return 301 https://\$server_name\$request_uri;
@@ -73,15 +191,3 @@ for i in {1..5}; do
     echo -n "."
     sleep 0.5
 done
-echo -e "\n"
-
-echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
-echo -e "\e[1;36m  ✅ Installation Completed Successfully! \e[0m"
-echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
-echo -e "\e[1;32m  🌐 Your Panel URL: \e[1;37mhttps://${DOMAIN}\e[0m"
-echo -e "\e[1;32m  📂 Panel Directory: \e[1;37m/var/www/pterodactyl\e[0m"
-echo -e "\e[1;32m  🛠 Create Admin: \e[1;37mphp artisan p:user:make\e[0m"
-echo -e "\e[1;32m  🔑 DB User: \e[1;37m${DB_USER}\e[0m"
-echo -e "\e[1;32m  🔑 DB Password: \e[1;37m${DB_PASS}\e[0m"
-echo -e "\e[1;33m━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\e[0m"
-echo -e "\e[1;35m  🎉 Enjoy your Pterodactyl Panel! \e[0m"
