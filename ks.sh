@@ -3,8 +3,8 @@ set -e
 
 NAME=$(ask "Enter name" "fastvm")
 IMAGE=$(ask "Enter image" "ubuntu:22.04")
-RAM=$(ask "Enter memory" "2.5")
-STORAGE=$(ask "Enter name" "25")
+RAM=$(ask "Enter memory (GB)" "2.5")
+STORAGE=$(ask "Enter storage (GB)" "25")
 
 docker rm -f $NAME 2>/dev/null || true
 
