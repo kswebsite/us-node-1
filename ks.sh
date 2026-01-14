@@ -1,23 +1,34 @@
 #!/bin/bash
 set -e
 
+# -------- ask function (REQUIRED) --------
+ask() {
+  local prompt="$1"
+  local default="$2"
+  local input
+
+  read -p "$prompt [$default]: " input
+  echo "${input:-$default}"
+}
+# ----------------------------------------
+
 NAME=$(ask "Enter name" "fastvm")
 IMAGE=$(ask "Enter image" "ubuntu:22.04")
 RAM=$(ask "Enter memory (GB)" "2.5")
 STORAGE=$(ask "Enter storage (GB)" "25")
 
-docker rm -f $NAME 2>/dev/null || true
+docker rm -f "$NAME" 2>/dev/null || true
 
 docker run -dit \
-  --name $NAME \
-  --hostname $NAME \
+  --name "$NAME" \
+  --hostname "$NAME" \
   --privileged \
-  --memory="$RAMg" \
-  --storage-opt size=$STORAGEG \
-  $IMAGE \
+  --memory="${RAM}g" \
+  --storage-opt size="${STORAGE}G" \
+  "$IMAGE" \
   bash
 
-docker exec $NAME sh -c "
+docker exec "$NAME" sh -c "
 apt update -y &&
 apt install -y openssh-server sudo curl wget git
 "
