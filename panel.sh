@@ -1,5 +1,8 @@
 #!/bin/bash
+set -e
 clear
+
+# --- Input ---
 read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
 read -p "Email [admin@gmail.com]: " EMAIL
 EMAIL=${EMAIL:-admin@gmail.com}
@@ -17,88 +20,59 @@ read -s -p "Password [admin@123]: " PASSWORD
 echo
 PASSWORD=${PASSWORD:-admin@123}
 
-# --- Dependencies ---
-apt update && apt install -y curl apt-transport-https ca-certificates gnupg unzip git tar sudo lsb-release
-
-# Detect OS
-OS=$(lsb_release -is | tr '[:upper:]' '[:lower:]')
-
-if [[ "$OS" == "ubuntu" ]]; then
-    echo "✅ Detected Ubuntu. Adding PPA for PHP..."
-    apt install -y software-properties-common
-    LC_ALL=C.UTF-8 add-apt-repository -y ppa:ondrej/php
-elif [[ "$OS" == "debian" ]]; then
-    echo "✅ Detected Debian. Skipping PPA and adding PHP repo manually..."
-    # Add SURY PHP repo for Debian
-    curl -fsSL https://packages.sury.org/php/apt.gpg | gpg --dearmor -o /usr/share/keyrings/sury-php.gpg
-    echo "deb [signed-by=/usr/share/keyrings/sury-php.gpg] https://packages.sury.org/php/ $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/sury-php.list
-fi
-
-# Add Redis GPG key and repo
-curl -fsSL https://packages.redis.io/gpg | sudo gpg --dearmor -o /usr/share/keyrings/redis-archive-keyring.gpg
-echo "deb [signed-by=/usr/share/keyrings/redis-archive-keyring.gpg] https://packages.redis.io/deb $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/redis.list
-
+# --- Update & dependencies ---
 apt update
+apt install -y curl gnupg unzip git tar lsb-release supervisor openssl mariadb-client php-cli php-fpm php-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype,simplexml,dom} redis-server
 
-# --- Install PHP + extensions ---
-apt install -y php8.3 php8.3-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype,simplexml,dom} mariadb-server nginx redis-server
+# --- Composer ---
+curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-# --- Install Composer ---
-curl -sS https://getcomposer.org/installer | sudo php -- --install-dir=/usr/local/bin --filename=composer
-
-# --- Download Pterodactyl Panel ---
+# --- Setup Panel ---
 mkdir -p /var/www/pterodactyl
 cd /var/www/pterodactyl
 curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
 tar -xzvf panel.tar.gz
 chmod -R 755 storage/* bootstrap/cache/
 
-# --- MariaDB Setup ---
+# --- .env ---
+cp .env.example .env
 DB_NAME=panel
 DB_USER=pterodactyl
-DB_PASS=yourPassword
-mariadb -e "CREATE USER '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASS}';"
-mariadb -e "CREATE DATABASE ${DB_NAME};"
-mariadb -e "GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'127.0.0.1' WITH GRANT OPTION;"
-mariadb -e "FLUSH PRIVILEGES;"
+DB_PASS=$(openssl rand -base64 16)
 
-# --- .env Setup ---
-if [ ! -f ".env.example" ]; then
-    curl -Lo .env.example https://raw.githubusercontent.com/pterodactyl/panel/develop/.env.example
-fi
-cp .env.example .env
 sed -i "s|APP_URL=.*|APP_URL=https://${DOMAIN}|g" .env
 sed -i "s|DB_DATABASE=.*|DB_DATABASE=${DB_NAME}|g" .env
 sed -i "s|DB_USERNAME=.*|DB_USERNAME=${DB_USER}|g" .env
 sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|g" .env
-if ! grep -q "^APP_ENVIRONMENT_ONLY=" .env; then
-    echo "APP_ENVIRONMENT_ONLY=false" >> .env
-fi
+echo "APP_ENVIRONMENT_ONLY=false" >> .env
 
-# --- Install PHP dependencies ---
-echo "✅ Installing PHP dependencies..."
+# --- PHP deps & artisan setup ---
 COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
-
-# --- Generate Application Key ---
-echo "✅ Generating application key..."
 php artisan key:generate --force
-
-# --- Run Migrations ---
 php artisan migrate --seed --force
 
 # --- Permissions ---
 chown -R www-data:www-data /var/www/pterodactyl/*
-apt install -y cron
-systemctl enable --now cron
-(crontab -l 2>/dev/null; echo "* * * * * php /var/www/pterodactyl/artisan schedule:run >> /dev/null 2>&1") | crontab -
+
+# --- Supervisor for Queue Worker ---
+mkdir -p /etc/supervisor/conf.d
+cat >/etc/supervisor/conf.d/pteroq.conf <<EOF
+[program:pteroq]
+command=/usr/bin/php /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
+user=www-data
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/pteroq.err.log
+stdout_logfile=/var/log/pteroq.out.log
+EOF
+
 # --- Nginx Setup ---
 mkdir -p /etc/certs/panel
-cd /etc/certs/panel
 openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
--subj "/C=NA/ST=NA/L=NA/O=NA/CN=Generic SSL Certificate" \
--keyout privkey.pem -out fullchain.pem
+  -subj "/C=NA/ST=NA/L=NA/O=NA/CN=Generic SSL Certificate" \
+  -keyout /etc/certs/panel/privkey.pem -out /etc/certs/panel/fullchain.pem
 
-tee /etc/nginx/sites-available/pterodactyl.conf > /dev/null << EOF
+cat >/etc/nginx/conf.d/pterodactyl.conf <<EOF
 server {
     listen 80;
     server_name ${DOMAIN};
@@ -116,8 +90,6 @@ server {
     ssl_certificate_key /etc/certs/panel/privkey.pem;
 
     client_max_body_size 100m;
-    client_body_timeout 120s;
-    sendfile off;
 
     location / {
         try_files \$uri \$uri/ /index.php?\$query_string;
@@ -125,10 +97,9 @@ server {
 
     location ~ \.php\$ {
         fastcgi_split_path_info ^(.+\.php)(/.+)\$;
-        fastcgi_pass unix:/run/php/php${PHP_VERSION}-fpm.sock;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
         fastcgi_index index.php;
-        include /etc/nginx/fastcgi_params;
-        fastcgi_param PHP_VALUE "upload_max_filesize=100M \n post_max_size=100M";
+        include fastcgi_params;
         fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
     }
 
@@ -138,33 +109,139 @@ server {
 }
 EOF
 
-ln -s /etc/nginx/sites-available/pterodactyl.conf /etc/nginx/sites-enabled/pterodactyl.conf || true
-nginx -t && systemctl restart nginx
+# --- Create Admin User ---
+cd /var/www/pterodactyl
+php artisan p:user:make --email="$EMAIL" --username="$USERNAME" --name="$FIRSTNAME $LASTNAME" --password="$PASSWORD" --admin
 
-# --- Queue Worker ---
-tee /etc/systemd/system/pteroq.service > /dev/null << 'EOF'
-[Unit]
-Description=Pterodactyl Queue Worker
-After=redis-server.service
+# --- Start Services in Docker ---
+echo "✅ Starting services..."
+service php8.3-fpm start
+service nginx start
+service redis-server start
+supervisord -n -c /etc/supervisor/supervisord.conf
 
-[Service]
-User=www-data
-Group=www-data
-Restart=always
-ExecStart=/usr/bin/php /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
-RestartSec=5s
+echo "✅ Pterodactyl Panel setup complete!"
+echo "Visit https://${DOMAIN}"#!/bin/bash
+set -e
+clear
 
-[Install]
-WantedBy=multi-user.target
+# --- Input ---
+read -p "Enter your domain (e.g., panel.example.com): " DOMAIN
+read -p "Email [admin@gmail.com]: " EMAIL
+EMAIL=${EMAIL:-admin@gmail.com}
+
+read -p "Username [admin]: " USERNAME
+USERNAME=${USERNAME:-admin}
+
+read -p "First name [Admin]: " FIRSTNAME
+FIRSTNAME=${FIRSTNAME:-Admin}
+
+read -p "Last name [Hosting]: " LASTNAME
+LASTNAME=${LASTNAME:-Hosting}
+
+read -s -p "Password [admin@123]: " PASSWORD
+echo
+PASSWORD=${PASSWORD:-admin@123}
+
+# --- Update & dependencies ---
+apt update
+apt install -y curl gnupg unzip git tar lsb-release supervisor openssl mariadb-client php-cli php-fpm php-{cli,fpm,common,mysql,mbstring,bcmath,xml,zip,curl,gd,tokenizer,ctype,simplexml,dom} redis-server
+
+# --- Composer ---
+curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+# --- Setup Panel ---
+mkdir -p /var/www/pterodactyl
+cd /var/www/pterodactyl
+curl -Lo panel.tar.gz https://github.com/pterodactyl/panel/releases/latest/download/panel.tar.gz
+tar -xzvf panel.tar.gz
+chmod -R 755 storage/* bootstrap/cache/
+
+# --- .env ---
+cp .env.example .env
+DB_NAME=panel
+DB_USER=pterodactyl
+DB_PASS=$(openssl rand -base64 16)
+
+sed -i "s|APP_URL=.*|APP_URL=https://${DOMAIN}|g" .env
+sed -i "s|DB_DATABASE=.*|DB_DATABASE=${DB_NAME}|g" .env
+sed -i "s|DB_USERNAME=.*|DB_USERNAME=${DB_USER}|g" .env
+sed -i "s|DB_PASSWORD=.*|DB_PASSWORD=${DB_PASS}|g" .env
+echo "APP_ENVIRONMENT_ONLY=false" >> .env
+
+# --- PHP deps & artisan setup ---
+COMPOSER_ALLOW_SUPERUSER=1 composer install --no-dev --optimize-autoloader
+php artisan key:generate --force
+php artisan migrate --seed --force
+
+# --- Permissions ---
+chown -R www-data:www-data /var/www/pterodactyl/*
+
+# --- Supervisor for Queue Worker ---
+mkdir -p /etc/supervisor/conf.d
+cat >/etc/supervisor/conf.d/pteroq.conf <<EOF
+[program:pteroq]
+command=/usr/bin/php /var/www/pterodactyl/artisan queue:work --queue=high,standard,low --sleep=3 --tries=3
+user=www-data
+autostart=true
+autorestart=true
+stderr_logfile=/var/log/pteroq.err.log
+stdout_logfile=/var/log/pteroq.out.log
 EOF
 
-systemctl daemon-reload
-systemctl enable --now redis-server
-systemctl enable --now pteroq.service
-clear
-# --- Admin User ---
-cd /var/www/pterodactyl
-printf 'yes\n${EMAIL}\n${USERNAME}\n${FIRSTNAME}\n${LASTNAME}\n${PASSWORD}\n' | php artisan p:user:make
+# --- Nginx Setup ---
+mkdir -p /etc/certs/panel
+openssl req -new -newkey rsa:4096 -days 3650 -nodes -x509 \
+  -subj "/C=NA/ST=NA/L=NA/O=NA/CN=Generic SSL Certificate" \
+  -keyout /etc/certs/panel/privkey.pem -out /etc/certs/panel/fullchain.pem
 
-sed -i '/^APP_ENVIRONMENT_ONLY=/d' .env
-echo "APP_ENVIRONMENT_ONLY=false" >> .env
+cat >/etc/nginx/conf.d/pterodactyl.conf <<EOF
+server {
+    listen 80;
+    server_name ${DOMAIN};
+    return 301 https://\$server_name\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name ${DOMAIN};
+
+    root /var/www/pterodactyl/public;
+    index index.php;
+
+    ssl_certificate /etc/certs/panel/fullchain.pem;
+    ssl_certificate_key /etc/certs/panel/privkey.pem;
+
+    client_max_body_size 100m;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        fastcgi_split_path_info ^(.+\.php)(/.+)\$;
+        fastcgi_pass unix:/run/php/php8.3-fpm.sock;
+        fastcgi_index index.php;
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+    }
+
+    location ~ /\.ht {
+        deny all;
+    }
+}
+EOF
+
+# --- Create Admin User ---
+cd /var/www/pterodactyl
+php artisan p:user:make --email="$EMAIL" --username="$USERNAME" --name="$FIRSTNAME $LASTNAME" --password="$PASSWORD" --admin
+
+# --- Start Services in Docker ---
+echo "✅ Starting services..."
+service php8.3-fpm start
+service nginx start
+service redis-server start
+supervisord -n -c /etc/supervisor/supervisord.conf
+
+echo "✅ Pterodactyl Panel setup complete!"
+echo "Visit https://${DOMAIN}"
